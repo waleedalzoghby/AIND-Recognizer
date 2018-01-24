@@ -33,8 +33,8 @@ class ModelSelector(object):
 
     def base_model(self, num_states):
         # with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", category=DeprecationWarning)
-        # warnings.filterwarnings("ignore", category=RuntimeWarning)
+        #warnings.filterwarnings("ignore", category=DeprecationWarning)
+        warnings.filterwarnings("ignore", category=RuntimeWarning)
         try:
             hmm_model = GaussianHMM(n_components=num_states, covariance_type="diag", n_iter=1000,
                                     random_state=self.random_state, verbose=False).fit(self.X, self.lengths)
@@ -67,6 +67,11 @@ class SelectorBIC(ModelSelector):
     http://www2.imm.dtu.dk/courses/02433/doc/ch6_slides.pdf
     Bayesian information criteria: BIC = -2 * logL + p * logN
     """
+    def calc_p(self, num_states, features):
+        return ( num_states ** 2 ) + ( 2 * num_states * features ) - 1
+
+    def calc_score_bic(self, log_likelihood, p, num_data_points):
+        return (-2 * log_likelihood) + (p * np.log(num_data_points))
 
     def select(self):
         """ select the best model for self.this_word based on
@@ -74,10 +79,23 @@ class SelectorBIC(ModelSelector):
 
         :return: GaussianHMM object
         """
-        warnings.filterwarnings("ignore", category=DeprecationWarning)
+        #warnings.filterwarnings("ignore", category=DeprecationWarning)
+        warnings.filterwarnings("ignore", category=RuntimeWarning)
 
         # TODO implement model selection based on BIC scores
-        raise NotImplementedError
+        bic_scores = []
+        for states in range(self.min_n_components, self.max_n_components + 1):
+            try:
+                hmm_model = self.base_model(states)
+                log_likelihood = hmm_model.score(self.X, self.lengths)
+                data_points = sum(self.lengths)
+                N, f = self.X.shape
+                p = self.calc_p(states, f)
+                score_bic = self.calc_score_bic(log_likelihood, p, data_points)
+                bic_scores.append(tuple([score_bic, hmm_model]))
+            except:
+                pass
+        return min(bic_scores, key = lambda x: x[0])[1] if bic_scores else None
 
 
 class SelectorDIC(ModelSelector):
@@ -90,11 +108,35 @@ class SelectorDIC(ModelSelector):
     DIC = log(P(X(i)) - 1/(M-1)SUM(log(P(X(all but i))
     '''
 
+    def calc_log_likelihood_remaining_words(self, model, remaining_words):
+        return [model[1].score(word[0], word[1]) for word in remaining_words]
+    
     def select(self):
-        warnings.filterwarnings("ignore", category=DeprecationWarning)
+        #warnings.filterwarnings("ignore", category=DeprecationWarning)
+        warnings.filterwarnings("ignore", category=RuntimeWarning)
 
         # TODO implement model selection based on DIC scores
-        raise NotImplementedError
+        remaining_words = []
+        
+        dic_scores = []
+        models = []
+        for word in self.words:
+            if word != self.this_word:
+                remaining_words.append(self.hwords[word])
+        try:
+            for states in range(self.min_n_components, self.max_n_components + 1):
+                hmm_model = self.base_model(states)
+                log_likelihood_original_word = hmm_model.score(self.X, self.lengths)
+                models.append((log_likelihood_original_word, hmm_model))
+
+        except Exception as e:
+            pass
+        
+        for index, model in enumerate(models):
+            log_likelihood_original_word, hmm_model = model
+            score_dic = log_likelihood_original_word - np.mean(self.calc_log_likelihood_remaining_words(model, remaining_words))
+            dic_scores.append(tuple([score_dic, model[1]]))
+        return max(dic_scores, key = lambda x: x[0])[1] if dic_scores else None
 
 
 class SelectorCV(ModelSelector):
@@ -103,7 +145,37 @@ class SelectorCV(ModelSelector):
     '''
 
     def select(self):
-        warnings.filterwarnings("ignore", category=DeprecationWarning)
+        #warnings.filterwarnings("ignore", category=DeprecationWarning)
+        warnings.filterwarnings("ignore", category=RuntimeWarning)
 
         # TODO implement model selection using CV
-        raise NotImplementedError
+        
+        kf = KFold(n_splits = 3, shuffle = False, random_state = None)
+        likelihoods = []
+        cv_scores = []
+        
+        for states in range(self.min_n_components, self.max_n_components + 1):    
+            try:
+                if len(self.sequences) > 2:
+
+                    for train_index, test_index in kf.split(self.sequences):
+ 
+                        self.X, self.lengths = combine_sequences(train_index, self.sequences)
+
+                        X_test, lengths_test = combine_sequences(test_index, self.sequences)
+
+                        hmm_model = self.base_model(states)
+                        log_likelihood = hmm_model.score(X_test, lengths_test)
+                else:
+                    hmm_model = self.base_model(states)
+                    log_likelihood = hmm_model.score(self.X, self.lengths)
+
+                    likelihoods.append(log_likelihood)
+                
+                score_cvs_avg = np.mean(likelihoods)
+                cv_scores.append(tuple([score_cvs_avg, hmm_model]))
+                
+            except Exception as e:
+                pass
+
+        return max(cv_scores, key = lambda x: x[0])[1] if cv_scores else None
